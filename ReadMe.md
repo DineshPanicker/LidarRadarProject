@@ -109,4 +109,4 @@ MIT License. For dataset use, refer to KITTI-360's CC-BY-NC-SA 3.0 License.
 
 ## 🙋‍♂️ Author
 
-This project is implemented by a student at RWU as part of the "Lidar and Radar Systems" course. Reach out for questions or collaboration!
+This project is implemented at RWU as part of the "Lidar and Radar Systems" course. Reach out for questions or collaboration!
