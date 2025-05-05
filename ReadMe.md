@@ -1,21 +1,112 @@
-# KITTI-360 dataset sample
+# KITTI-360 Project: LiDAR and Camera Fusion with YOLO Segmentation
 
-This is sample of [KITTI-360](https://www.cvlibs.net/datasets/kitti-360/index.php) dataset. It contains the 20 frames of Cam 1 and 2, as well as the point clouds of the Velodyne LiDAR.
+This project demonstrates LiDAR point cloud projection onto 2D camera images using the KITTI-360 dataset. It integrates instance segmentation (YOLOv8) to identify cars in the image, then assigns unique colors to 3D LiDAR points corresponding to each detected car. The final 3D point cloud is visualized in Open3D with vibrant VIBGYOR coloring for cars and grey/black for background points.
 
-For how the data is structured, please consult the official [documentation](https://www.cvlibs.net/datasets/kitti-360/documentation.php)
+---
 
-You can also take a look at the [GitHub-Repo](https://github.com/autonomousvision/kitti360Scripts) to find some helper functions (like projecting the point cloud to the image space and how to load data) already implemented.
+## 📁 Dataset Description
 
-The folder bboxes_3D_cam0 was created by us. It contains a JSON-File for every frame. Each object has an index, which is a unique ID for a car, as well as 8 corners for a 3D bounding box. The bounding box is given in the coordinate space of cam0.
+This sample of the [KITTI-360](https://www.cvlibs.net/datasets/kitti-360/index.php) dataset includes:
 
-The corner points are ordered like this:
+* 20 frames of images from Cam 1 and Cam 2
+* Velodyne 3D point clouds
+* Calibration files
+* Custom 3D bounding boxes (`bboxes_3D_cam0`) provided in JSON format (indexed per frame)
 
-     Top view:
-       4 -------- 5
-      /          /
-     7 -------- 6
+Refer to the official [documentation](https://www.cvlibs.net/datasets/kitti-360/documentation.php) for full dataset structure.
 
-     Bottom view:
-       0 -------- 1
-      /          /
-     3 -------- 2
+---
+
+## 🧠 Project Workflow
+
+### 1. **Data Loading**
+
+* Read LiDAR binary files (`.bin`) into Nx4 arrays (x, y, z, intensity)
+* Read corresponding RGB images
+
+### 2. **Calibration Parsing**
+
+* Use `calib_cam_to_velo.txt` to transform LiDAR to camera coordinates
+* Use `perspective.txt` for the projection matrix `P_rect_00`
+
+### 3. **YOLOv8 Instance Segmentation**
+
+* Run `yolov8s-seg.pt` model to segment cars from the image
+* Assign each car a unique mask
+
+### 4. **Projection & Filtering**
+
+* Project LiDAR points to 2D using the projection matrix
+* Filter points that fall inside each car's segmentation mask
+
+### 5. **Color Coding**
+
+* Assign VIBGYOR colors to each car cluster
+* Color all non-car/background points as black or grey
+
+### 6. **Visualization**
+
+* Display projected points over 2D image (OpenCV)
+* Export 3D colored point cloud as `.ply` and visualize using Open3D
+
+---
+
+## 🖼️ Output Samples
+
+* `output_image_with_car_mask.png`: Overlaid segmentation masks and LiDAR points on RGB image
+* `scene_id_3d.ply`: Colored 3D point cloud for each frame
+
+---
+
+## 🔧 Dependencies
+
+```bash
+pip install ultralytics open3d numpy opencv-python
+```
+
+Model file:
+
+```
+YOLO_MODEL_PATH = r"A:\RWU\Second Sem\Lidar and Radar\yolov8s-seg.pt"
+```
+
+---
+
+## 📦 File Structure
+
+```
+Lidar-Project/
+├── calibration/
+│   ├── calib_cam_to_velo.txt
+│   ├── perspective.txt
+├── data_2d_raw/
+│   └── ... image data ...
+├── data_3d_raw/
+│   └── ... velodyne bin files ...
+├── bboxes_3D_cam0/
+│   └── BBoxes_xxx.json
+├── output_result/
+│   ├── *.png
+│   └── *.ply
+└── main.py
+```
+
+---
+
+## 🧩 Acknowledgments
+
+* [KITTI-360 dataset](https://www.cvlibs.net/datasets/kitti-360/)
+* [Ultralytics YOLOv8](https://github.com/ultralytics/ultralytics)
+* [Open3D](http://www.open3d.org/)
+
+---
+
+## ✍️ License
+
+MIT License. For dataset use, refer to KITTI-360's CC-BY-NC-SA 3.0 License.
+
+---
+
+## 🙋‍♂️ Author
+
+This project is implemented at RWU as part of the "Lidar and Radar Systems" course. Reach out for questions or collaboration!
