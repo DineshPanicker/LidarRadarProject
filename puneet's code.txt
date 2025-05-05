@@ -1,0 +1,109 @@
+import numpy as np
+import cv2
+import torch
+from ultralytics import YOLO
+
+# ============================= HARDCODED CALIBRATIONS =============================
+
+T_cam_to_velo = np.array([
+    [0.04307104361, -0.08829286498, 0.995162929, 0.8043914418],
+    [-0.999004371, 0.007784614041, 0.04392796942, 0.2993489574],
+    [-0.01162548558, -0.9960641394, -0.08786966659, -0.1770225824],
+    [0, 0, 0, 1]
+])
+T_velo_to_cam0 = np.linalg.inv(T_cam_to_velo)
+
+P = np.array([
+    [552.554261, 0.0, 682.049453, 0.0],
+    [0.0, 552.554261, 238.769549, 0.0],
+    [0.0, 0.0, 1.0, 0.0]
+])
+
+# ============================= FUNCTIONS =============================
+
+def load_lidar_bin(bin_path):
+    lidar = np.fromfile(bin_path, dtype=np.float32).reshape(-1, 4)
+    return lidar[:, :3]
+
+def project_to_image(pts_3d, P):
+    pts_3d_hom = np.hstack((pts_3d, np.ones((pts_3d.shape[0], 1))))
+    pts_2d_hom = pts_3d_hom @ P.T
+    pts_2d = pts_2d_hom[:, :2] / pts_2d_hom[:, 2:3]
+    return pts_2d
+
+def draw_lidar_on_image(img, pts_2d, depths, mask=None, color_map=cv2.COLORMAP_JET, alpha=0.5):
+    depths_normalized = np.clip((depths - depths.min()) / (depths.max() - depths.min()) * 255, 0, 255).astype(np.uint8)
+    img_with_alpha = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+
+    for i, pt in enumerate(pts_2d):
+        x, y = int(pt[0]), int(pt[1])
+        if 0 <= x < img.shape[1] and 0 <= y < img.shape[0]:
+            if mask is not None and mask[y, x] == 0:
+                continue
+            color = cv2.applyColorMap(np.array([[depths_normalized[i]]], dtype=np.uint8), color_map)[0][0]
+            img_with_alpha[y, x] = (*color[:3], int(alpha * 255))
+
+    return cv2.cvtColor(img_with_alpha, cv2.COLOR_BGRA2BGR)
+
+# ============================= MAIN =============================
+
+lidar_bin_path = r"C:\Users\Puneet\Downloads\KITTI-360_sample\KITTI-360_sample\data_3d_raw\2013_05_28_drive_0000_sync\velodyne_points\data\0000000100.bin"
+image_path = r"C:\Users\Puneet\Downloads\KITTI-360_sample\KITTI-360_sample\data_2d_raw\2013_05_28_drive_0000_sync\image_00\data_rect\0000000100.png"
+output_img_path = r"C:\Users\Puneet\Downloads\KITTI-360_sample\KITTI-360_sample\output_result\output_image_with_car_mask.png"
+
+model = YOLO('yolov8s-seg.pt')
+image = cv2.imread(image_path)
+lidar_points = load_lidar_bin(lidar_bin_path)
+
+# Project LiDAR points to image
+lidar_points_hom = np.hstack((lidar_points, np.ones((lidar_points.shape[0], 1))))
+pts_cam0 = lidar_points_hom @ T_velo_to_cam0.T
+pts_cam0 = pts_cam0[pts_cam0[:, 2] > 0]
+pts_2d = project_to_image(pts_cam0[:, :3], P)
+depths = pts_cam0[:, 2]
+
+# Run YOLOv8 Segmentation
+results = model(image)[0]
+car_clusters = {}
+
+if results.masks is not None:
+    masks = results.masks.data.cpu().numpy()
+    classes = results.boxes.cls.cpu().numpy().astype(int)
+
+    car_id = 0
+    for i, cls in enumerate(classes):
+        if cls == 2:  # car class
+            mask = masks[i]
+            mask_resized = cv2.resize((mask > 0.5).astype(np.uint8), (image.shape[1], image.shape[0]))
+
+            # Get LiDAR points falling inside this specific car mask
+            lidar_points_this_car = []
+            for j, (x, y) in enumerate(pts_2d.astype(int)):
+                if 0 <= x < mask_resized.shape[1] and 0 <= y < mask_resized.shape[0]:
+                    if mask_resized[y, x] > 0:
+                        # Convert back to Velodyne coords
+                        pt_cam_hom = np.hstack((pts_cam0[j, :3], 1))
+                        pt_velo = T_cam_to_velo @ pt_cam_hom
+                        lidar_points_this_car.append(pt_velo[:3])
+
+            if lidar_points_this_car:
+                car_clusters[car_id] = lidar_points_this_car
+                print(f"\nCar ID {car_id}: {len(lidar_points_this_car)} points in Velodyne coords")
+                for pt in lidar_points_this_car:
+                    print(f"  {pt}")
+                car_id += 1
+
+else:
+    print("No masks detected.")
+
+# Visualize
+final_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+for i, cls in enumerate(results.boxes.cls.cpu().numpy().astype(int)):
+    if cls == 2:
+        m = results.masks.data[i].cpu().numpy()
+        m_resized = cv2.resize((m > 0.5).astype(np.uint8), (image.shape[1], image.shape[0]))
+        final_mask = cv2.bitwise_or(final_mask, m_resized.astype(np.uint8) * 255)
+
+output_img = draw_lidar_on_image(image, pts_2d, depths, mask=final_mask, alpha=0.8)
+cv2.imwrite(output_img_path, output_img)
+print("\nVisualization saved at:", output_img_path)
