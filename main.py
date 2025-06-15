@@ -14,7 +14,7 @@ BBOX_DIR = os.path.join(DATASET_PATH, "bboxes_3D_cam0")
 OUTPUT_PLY_DIR = os.path.join(DATASET_PATH, "output_yolo_gt_ply")
 os.makedirs(OUTPUT_PLY_DIR, exist_ok=True)
 
-YOLO_MODEL_PATH = os.path.join(DATASET_PATH, "yolov8s-seg.pt")
+YOLO_MODEL_PATH = os.path.join(DATASET_PATH, "yolov8x-seg.pt")
 CAR_CLASS_ID = 2  # COCO ID for car
 
 # ========== FUNCTIONS ==========
@@ -46,10 +46,19 @@ def assign_points(img_pts, masks, shape):
     valid_pts = img_pts[valid].astype(int)
     for i, mask in enumerate(masks):
         resized = cv2.resize(mask, (shape[1], shape[0]))
-        inside = resized[valid_pts[:, 1], valid_pts[:, 0]] > 0.5
+
+        # === Erode mask to reduce bleed-out ===
+        resized = (resized * 255).astype(np.uint8)
+        kernel = np.ones((5, 5), np.uint8)  # Adjust kernel size as needed
+        eroded = cv2.erode(resized, kernel, iterations=2)
+        eroded = eroded.astype(np.float32) / 255.0
+        # =======================================
+
+        inside = eroded[valid_pts[:, 1], valid_pts[:, 0]] > 0.5
         idxs = np.where(valid)[0][inside]
         assignment[idxs] = i
     return assignment
+
 
 def load_ground_truth_boxes(bbox_dir, scene_id):
     json_path = os.path.join(bbox_dir, f"BBoxes_{int(scene_id)}.json")
@@ -57,18 +66,28 @@ def load_ground_truth_boxes(bbox_dir, scene_id):
         data = json.load(f)
     return data if isinstance(data, list) else data.get("boxes", [])
 
+def generate_colors(num_colors):
+    import colorsys
+    colors = []
+    for i in range(num_colors):
+        hue = i / num_colors
+        lightness = 0.5
+        saturation = 0.9
+        rgb = colorsys.hls_to_rgb(hue, lightness, saturation)
+        colors.append(rgb)
+    return np.array(colors)
+
 def create_pcd(points, assignment, num_masks):
-    vibgyor = np.array([
-        [1, 0, 0], [1, 0.6, 0], [1, 1, 0],
-        [0, 1, 0], [0, 0, 1], [0.29, 0, 0.51], [0.93, 0.5, 0.93]
-    ])
-    colors = np.ones((len(points), 3)) * 0.2
-    for i in range(num_masks):
-        colors[assignment == i] = vibgyor[i % len(vibgyor)]
+    colors = np.ones((len(points), 3)) * 0.2  # default dim color for unassigned points
+    if num_masks > 0:
+        car_colors = generate_colors(num_masks)
+        for i in range(num_masks):
+            colors[assignment == i] = car_colors[i]
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
     pcd.colors = o3d.utility.Vector3dVector(colors)
     return pcd
+
 
 # ========== MAIN ==========
 T_velo_to_cam, P_rect_00 = load_calibration(CALIB_DIR)
@@ -107,7 +126,13 @@ for fname in sorted(os.listdir(LIDAR_DIR)):
     ply_path = os.path.join(OUTPUT_PLY_DIR, f"{scene_id}_yolo_gt.ply")
     o3d.io.write_point_cloud(ply_path, pcd)
 
-    # Save GT bounding boxes (transformed to LiDAR space) to JSON
+   # Check if GT JSON exists
+    gt_json_path = os.path.join(BBOX_DIR, f"BBoxes_{int(scene_id)}.json")
+    if not os.path.exists(gt_json_path):
+        print(f"⚠️ Skipping GT boxes for {scene_id} (JSON not found)")
+        continue
+
+    # Load and transform GT boxes
     gt_boxes_lidar = []
     boxes = load_ground_truth_boxes(BBOX_DIR, scene_id)
     for box in boxes:
